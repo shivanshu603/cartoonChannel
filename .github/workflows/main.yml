@@ -1,0 +1,68 @@
+name: Movie Storyteller - Hindi Series
+
+on:
+  schedule:
+    - cron: '0 0,6,12,18 * * *'
+  workflow_dispatch:
+
+jobs:
+  generate-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        with:
+          ffmpeg-version: '7.0'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Setup Fonts
+        run: |
+          sudo apt-get install -y -q fonts-noto-core
+          python setup_fonts.py
+
+      - name: Restore Story State
+        uses: actions/cache@v4
+        with:
+          path: |
+            story_state.json
+            movies_list.json
+          key: story-state-${{ github.run_number }}
+          restore-keys: |
+            story-state-
+
+      - name: Run Movie Storyteller
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          CHANNEL_NAME: ${{ secrets.CHANNEL_NAME }}
+        run: python main.py
+
+      - name: Save Story State
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            story_state.json
+            movies_list.json
+          key: story-state-${{ github.run_number }}
+
+      - name: Job Summary
+        if: always()
+        run: |
+          echo "✅ Done at $(date)"
+          cat story_state.json || true

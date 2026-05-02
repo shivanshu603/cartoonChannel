@@ -1,0 +1,32 @@
+name: Daily Autonomous Movie Shorts
+
+on:
+  schedule:
+    - cron: '0 6,12,18,0 * * *'     # 4 times a day (har 6 ghante)
+  workflow_dispatch:                # Manual test ke liye
+
+jobs:
+  generate-and-upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install google-generativeai edge-tts ffmpeg-python
+
+      - name: Run Autonomous Story Generator
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: python main.py
