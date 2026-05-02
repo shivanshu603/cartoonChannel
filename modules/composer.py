@@ -150,7 +150,7 @@ class Composer:
 
         style = (
             f"fontfile={safe_font},"
-            "FontSize=22,"
+            "FontSize=18,"
             "PrimaryColour=&H00FFFFFF,"
             "OutlineColour=&H00000000,"
             "BackColour=&H80000000,"
@@ -158,7 +158,7 @@ class Composer:
             "Outline=3,"
             "Shadow=1,"
             "Alignment=2,"
-            "MarginV=120,"
+            "MarginV=140,"
             "MarginL=40,"
             "MarginR=40"
         )
@@ -221,7 +221,7 @@ class Composer:
     # ─────────────────────────────────────────────────────────────────
 
     def _image_to_video_kenburns(self, img_path, duration, out_path, zoom_dir="in"):
-        fps    = 25
+        fps    = 30
         frames = int(duration * fps)
         z_expr = "min(zoom+0.0003,1.08)" if zoom_dir == "in" else "max(zoom-0.0003,1.0)"
         vf = (
