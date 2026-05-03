@@ -100,41 +100,58 @@ class Composer:
         h  = total_ms // 3600000
         return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
-    def _make_synced_srt(self, text, audio_dur, scene_id):
+    def _make_synced_srt(self, char_timings, intro_offset=2.0, scene_id=1):
         """
-        Build SRT timed to actual voice duration.
-        Groups words into short lines (4-5 words), timing proportional to word count.
-        SRT offset = +2 seconds because video starts with 2-sec intro.
+        Build SRT from char_timings (per-line timings from audio engine).
+        Each line shows: CHARACTER NAME on line 1, dialogue words on line 2+
+        intro_offset = +2.0s because video starts with 2-sec intro frame.
         """
-        words = text.split()
-        if not words:
+        if not char_timings:
             return None
 
-        # Group into lines of max 5 words
-        lines, cur = [], []
-        for w in words:
-            cur.append(w)
-            if len(cur) >= 5:
-                lines.append(" ".join(cur))
-                cur = []
-        if cur:
-            lines.append(" ".join(cur))
+        srt_path = os.path.join(self.temp_dir, f"sub_{scene_id}.srt")
+        entries  = []
+        idx      = 1
 
-        if not lines:
+        for timing in char_timings:
+            tag   = timing.get("tag", "NARRATOR")
+            text  = timing.get("text", "").strip()
+            start = timing.get("start", 0.0) + intro_offset
+            end   = timing.get("end",   0.0) + intro_offset
+
+            if not text or end <= start:
+                continue
+
+            # Line 1: character name badge (NARRATOR has no name badge)
+            name_line = "" if tag == "NARRATOR" else f"[ {tag.title()} ]"
+
+            # Split dialogue into chunks of 5 words
+            words = text.split()
+            chunks, cur = [], []
+            for w in words:
+                cur.append(w)
+                if len(cur) >= 5:
+                    chunks.append(" ".join(cur))
+                    cur = []
+            if cur:
+                chunks.append(" ".join(cur))
+
+            dur_per_chunk = max((end - start) / len(chunks), 0.5)
+
+            for ci, chunk in enumerate(chunks):
+                cs = start + ci * dur_per_chunk
+                ce = min(cs + dur_per_chunk - 0.05, end)
+                # Combine name badge + dialogue chunk
+                sub_text = f"{name_line}\n{chunk}" if name_line else chunk
+                entries.append((idx, cs, ce, sub_text))
+                idx += 1
+
+        if not entries:
             return None
-
-        total_words  = len(words)
-        srt_path     = os.path.join(self.temp_dir, f"sub_{scene_id}.srt")
-        current_time = 2.0   # ← offset for 2-sec intro at start
 
         with open(srt_path, "w", encoding="utf-8") as f:
-            for i, line in enumerate(lines):
-                lw       = len(line.split())
-                line_dur = max((lw / total_words) * audio_dur, 0.8)
-                start    = current_time
-                end      = current_time + line_dur - 0.05
-                f.write(f"{i+1}\n{self._srt_ts(start)} --> {self._srt_ts(end)}\n{line}\n\n")
-                current_time += line_dur
+            for i, cs, ce, sub_text in entries:
+                f.write(f"{i}\n{self._srt_ts(cs)} --> {self._srt_ts(ce)}\n{sub_text}\n\n")
 
         return srt_path
 
@@ -150,15 +167,16 @@ class Composer:
 
         style = (
             f"fontfile={safe_font},"
-            "FontSize=18,"
-            "PrimaryColour=&H00FFFFFF,"
+            "FontSize=20,"
+            "PrimaryColour=&H00FFFFFF,"   # white dialogue
+            "SecondaryColour=&H0000FFFF," # yellow name badge
             "OutlineColour=&H00000000,"
-            "BackColour=&H80000000,"
+            "BackColour=&H90000000,"
             "Bold=1,"
             "Outline=3,"
             "Shadow=1,"
             "Alignment=2,"
-            "MarginV=140,"
+            "MarginV=130,"
             "MarginL=40,"
             "MarginR=40"
         )
@@ -221,7 +239,7 @@ class Composer:
     # ─────────────────────────────────────────────────────────────────
 
     def _image_to_video_kenburns(self, img_path, duration, out_path, zoom_dir="in"):
-        fps    = 30
+        fps    = 25
         frames = int(duration * fps)
         z_expr = "min(zoom+0.0003,1.08)" if zoom_dir == "in" else "max(zoom-0.0003,1.0)"
         vf = (
@@ -395,9 +413,19 @@ class Composer:
             print(f"   ❌ Audio mix failed: {e}")
             return None
 
-        # ── Step 4: Synced subtitles (offset +2s for intro) ──────────
-        actual_dur = self.get_duration(nosub_path)
-        srt = self._make_synced_srt(script_text, actual_dur - 2.0, part_num)
+        # ── Step 4: Synced subtitles with character names ─────────────
+        char_timings = scene.get("char_timings", [])
+        actual_dur   = self.get_duration(nosub_path)
+
+        # Fallback: if no char_timings, build basic SRT from plain text
+        if not char_timings and scene.get("text"):
+            words     = scene["text"].split()
+            dur       = max(actual_dur - 2.0, 1.0)
+            fake_end  = 2.0 + dur
+            char_timings = [{"tag": "NARRATOR", "text": scene["text"],
+                              "start": 0.0, "end": dur}]
+
+        srt = self._make_synced_srt(char_timings, intro_offset=2.0, scene_id=part_num)
         if srt:
             ok = self._burn_subtitles(nosub_path, srt, subbed_path)
             current = subbed_path if ok else nosub_path
