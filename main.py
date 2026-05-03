@@ -60,6 +60,20 @@ async def create_one_short(short_number):
         print(f"❌ Audio Error: {e}")
         return False
 
+    # Persist voice_slot assignments back into brain state
+    # so same character keeps same voice in future parts
+    try:
+        updated_profiles = script_data[0].get("character_profiles", {})
+        if updated_profiles:
+            brain.state.setdefault("character_profiles", {})
+            for cname, cdata in updated_profiles.items():
+                if cname in brain.state["character_profiles"]:
+                    brain.state["character_profiles"][cname]["voice_slot"] = \
+                        cdata.get("voice_slot", brain.state["character_profiles"][cname].get("voice_slot"))
+            brain._save_state()
+    except Exception:
+        pass
+
     # ── 3. AI IMAGES (6-8 per scene) ─────────────────────────────────
     image_gen        = ImageGenerator()
     image_paths_list = []
