@@ -4,64 +4,35 @@ import subprocess
 import edge_tts
 from mutagen.mp3 import MP3
 
-# ── Voice profiles for each character tag ────────────────────────────
-# Edge TTS Hindi voices available:
-#   hi-IN-MadhurNeural  — male, deep, natural
-#   hi-IN-SwaraNeural   — female, warm, expressive
+# ── Voice feel presets — applied on top of gender-based voice ────────
+# gender is determined per-character by brain.py
+# feel controls rate/pitch/volume only
 
-VOICE_PROFILES = {
-    "NARRATOR": {
-        "voice":  "hi-IN-MadhurNeural",
-        "rate":   "+10%",
-        "pitch":  "-4Hz",
-        "volume": "+8%",
-        "label":  "Narrator",
-    },
-    "HERO": {
-        "voice":  "hi-IN-MadhurNeural",
-        "rate":   "+20%",
-        "pitch":  "+2Hz",
-        "volume": "+10%",
-        "label":  "Hero",
-    },
-    "VILLAIN": {
-        "voice":  "hi-IN-MadhurNeural",
-        "rate":   "-8%",
-        "pitch":  "-10Hz",
-        "volume": "+12%",
-        "label":  "Villain",
-    },
-    "FEMALE": {
-        "voice":  "hi-IN-SwaraNeural",
-        "rate":   "+8%",
-        "pitch":  "+0Hz",
-        "volume": "+8%",
-        "label":  "Female",
-    },
-    "CHILD": {
-        "voice":  "hi-IN-SwaraNeural",
-        "rate":   "+25%",
-        "pitch":  "+6Hz",
-        "volume": "+8%",
-        "label":  "Child",
-    },
-    "ELDER": {
-        "voice":  "hi-IN-MadhurNeural",
-        "rate":   "-15%",
-        "pitch":  "-6Hz",
-        "volume": "+6%",
-        "label":  "Elder",
-    },
-    "SIDEKICK": {
-        "voice":  "hi-IN-MadhurNeural",
-        "rate":   "+18%",
-        "pitch":  "+4Hz",
-        "volume": "+10%",
-        "label":  "Sidekick",
-    },
+FEEL_PRESETS = {
+    "NARRATOR": {"rate": "+8%",  "pitch": "-3Hz",  "volume": "+8%"},
+    "HERO":     {"rate": "+18%", "pitch": "+2Hz",  "volume": "+10%"},
+    "VILLAIN":  {"rate": "-10%", "pitch": "-12Hz", "volume": "+12%"},
+    "ELDER":    {"rate": "-12%", "pitch": "-6Hz",  "volume": "+6%"},
+    "CHILD":    {"rate": "+28%", "pitch": "+8Hz",  "volume": "+8%"},
+    "SIDEKICK": {"rate": "+20%", "pitch": "+4Hz",  "volume": "+10%"},
+    "FEMALE":   {"rate": "+8%",  "pitch": "+0Hz",  "volume": "+8%"},
+    # default fallback
+    "DEFAULT":  {"rate": "+8%",  "pitch": "+0Hz",  "volume": "+8%"},
 }
 
-DEFAULT_PROFILE = VOICE_PROFILES["NARRATOR"]
+MALE_VOICE   = "hi-IN-MadhurNeural"
+FEMALE_VOICE = "hi-IN-SwaraNeural"
+
+
+def _resolve_profile(gender: str, feel: str) -> dict:
+    """
+    gender: 'male' | 'female'  (from brain's character_profiles)
+    feel:   any key in FEEL_PRESETS  (HERO, VILLAIN, CHILD, etc.)
+    Returns full TTS profile dict.
+    """
+    voice   = FEMALE_VOICE if gender.lower() == "female" else MALE_VOICE
+    preset  = FEEL_PRESETS.get(feel.upper(), FEEL_PRESETS["DEFAULT"])
+    return {"voice": voice, **preset}
 
 
 class AudioEngine:
@@ -70,31 +41,31 @@ class AudioEngine:
         self.output_dir = os.path.join(os.getcwd(), "assets", "audio_clips")
         os.makedirs(self.output_dir, exist_ok=True)
 
-    async def _generate_line(self, text, tag, filename, retries=3):
-        profile = VOICE_PROFILES.get(tag.upper(), DEFAULT_PROFILE)
-        output_path = os.path.join(self.output_dir, filename)
+    # ── Generate one TTS clip ────────────────────────────────────────
 
+    async def _generate_clip(self, text, profile, filename, retries=3):
+        output_path = os.path.join(self.output_dir, filename)
         for attempt in range(retries):
             try:
-                communicate = edge_tts.Communicate(
+                comm = edge_tts.Communicate(
                     text=text,
                     voice=profile["voice"],
                     rate=profile["rate"],
                     pitch=profile["pitch"],
                     volume=profile["volume"],
                 )
-                await communicate.save(output_path)
+                await comm.save(output_path)
                 return output_path
             except Exception as e:
-                print(f"      Audio error [{tag}] attempt {attempt+1}: {e}")
+                print(f"      TTS error attempt {attempt+1}: {e}")
                 if attempt < retries - 1:
                     await asyncio.sleep(2)
                 else:
-                    raise e
+                    raise
 
-    def get_audio_duration(self, file_path):
+    def get_audio_duration(self, path):
         try:
-            return MP3(file_path).info.length
+            return MP3(path).info.length
         except Exception:
             return 0.0
 
@@ -103,34 +74,36 @@ class AudioEngine:
         with open(list_file, "w", encoding="utf-8") as f:
             for p in clip_paths:
                 f.write(f"file '{p}'\n")
-
         cmd = [
-            "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0",
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
             "-i", list_file,
             "-acodec", "libmp3lame", "-q:a", "2",
             output_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True)
         try:
             os.remove(list_file)
         except Exception:
             pass
-
-        if result.returncode != 0:
-            print(f"   Merge failed:\n{result.stderr[-200:]}")
+        if r.returncode != 0:
+            print(f"   Merge failed: {r.stderr[-200:]}")
             return False
         return True
 
-    async def process_scene(self, scene):
-        scene_id     = scene.get("id", 1)
-        script_lines = scene.get("script_lines", [])
+    # ── Process one scene ────────────────────────────────────────────
 
+    async def process_scene(self, scene):
+        scene_id      = scene.get("id", 1)
+        script_lines  = scene.get("script_lines", [])
+        char_profiles = scene.get("character_profiles", {})
+
+        # Backward compat: plain text scene
         if not script_lines and scene.get("text"):
-            script_lines = [{"tag": "NARRATOR", "text": scene["text"]}]
+            script_lines = [{"tag": "NARRATOR", "voice_type": "NARRATOR",
+                              "gender": "male", "text": scene["text"]}]
 
         if not script_lines:
-            print(f"   Scene {scene_id}: no script lines")
+            print(f"   Scene {scene_id}: no lines")
             return scene
 
         print(f"   Scene {scene_id} — {len(script_lines)} lines")
@@ -140,33 +113,40 @@ class AudioEngine:
         current_time = 0.0
 
         for i, line in enumerate(script_lines):
-            tag        = line.get("tag", "NARRATOR").upper()
-            voice_type = line.get("voice_type", tag).upper()   # resolved by brain.py
-            text       = line.get("text", "").strip()
+            tag        = str(line.get("tag", "NARRATOR")).upper().strip()
+            voice_type = str(line.get("voice_type", "DEFAULT")).upper().strip()
+            text       = str(line.get("text", "")).strip()
             if not text:
                 continue
 
-            profile  = VOICE_PROFILES.get(voice_type, DEFAULT_PROFILE)
+            # Resolve gender: check saved character_profiles first
+            if tag == "NARRATOR":
+                gender = "male"
+            else:
+                cp     = char_profiles.get(tag, {})
+                gender = str(cp.get("gender", line.get("gender", "male"))).lower().strip()
+
+            profile  = _resolve_profile(gender, voice_type)
             filename = f"line_{scene_id}_{i:03d}_{tag}.mp3"
 
             try:
-                path = await self._generate_line(text, tag, filename)
+                path = await self._generate_clip(text, profile, filename)
                 dur  = self.get_audio_duration(path)
                 clip_paths.append(path)
                 char_timings.append({
-                    "tag":   tag,
-                    "label": profile["label"],
-                    "text":  text,
-                    "start": current_time,
-                    "end":   current_time + dur,
+                    "tag":    tag,
+                    "gender": gender,
+                    "feel":   voice_type,
+                    "voice":  profile["voice"],
+                    "text":   text,
+                    "start":  current_time,
+                    "end":    current_time + dur,
                 })
                 current_time += dur
-                print(f"      [{tag} → {profile['label']}] ({dur:.1f}s): {text[:50]}{'...' if len(text)>50 else ''}")
-                await asyncio.sleep(0.5)
-
+                print(f"      [{tag}|{gender}|{voice_type}] {profile['voice'].split('-')[2][:6]} ({dur:.1f}s): {text[:45]}{'...' if len(text)>45 else ''}")
+                await asyncio.sleep(0.4)
             except Exception as e:
-                print(f"      Skipping line {i} [{tag}]: {e}")
-                continue
+                print(f"      Skipping [{tag}]: {e}")
 
         if not clip_paths:
             print(f"   Scene {scene_id}: no clips generated")
@@ -176,25 +156,21 @@ class AudioEngine:
             final_path = clip_paths[0]
         else:
             final_path = os.path.join(self.output_dir, f"voice_{scene_id}.mp3")
-            ok = self._merge_clips(clip_paths, final_path)
-            if not ok:
+            if not self._merge_clips(clip_paths, final_path):
                 final_path = clip_paths[0]
 
         total_dur = self.get_audio_duration(final_path)
         scene["audio_path"]   = final_path
         scene["duration"]     = total_dur
         scene["char_timings"] = char_timings
-
-        tags_used = list({t["tag"] for t in char_timings})
-        print(f"   Scene {scene_id}: {total_dur:.1f}s | voices used: {tags_used}")
+        print(f"   ✅ {total_dur:.1f}s | {len(char_timings)} lines | voices: { {t['tag']:t['voice'].split('-')[2][:6] for t in char_timings} }")
         return scene
 
     async def process_script(self, script_data):
-        print(f"Multi-Voice Audio Engine — {len(script_data)} scene(s)...")
+        print(f"🎙️ Audio Engine — {len(script_data)} scene(s)...")
         for i, scene in enumerate(script_data):
             try:
                 script_data[i] = await self.process_scene(scene)
             except Exception as e:
-                print(f"   Scene {scene.get('id','?')} failed: {e}")
-                continue
+                print(f"   Scene {i} failed: {e}")
         return script_data
