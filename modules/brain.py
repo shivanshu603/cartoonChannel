@@ -25,23 +25,7 @@ PIXAR_STYLE = (
     "ultra detailed, 8k"
 )
 
-# ── Character visual descriptions — so every prompt has consistent look
-CHARACTER_LOOKS = {
-    "harry potter": "young boy with round glasses, lightning bolt scar on forehead, messy black hair, Hogwarts robes",
-    "dumbledore": "very old wizard with long silver beard and hair, half-moon spectacles, purple robes, kind wise eyes",
-    "hermione": "young girl with bushy brown hair, smart curious eyes, Hogwarts robes, holding book or wand",
-    "ron": "tall red-haired freckled boy, surprised expression, Hogwarts robes",
-    "voldemort": "pale bald man with no nose, red serpent eyes, black flowing robes, terrifying expression",
-    "snape": "pale man with greasy black hair, hooked nose, black robes, stern cold expression",
-    "hagrid": "enormous friendly giant man with wild bushy black beard, kind brown eyes, heavy fur coat",
-    "dobby": "small elf with huge green eyes, bat-like ears, wearing pillowcase, innocent expression",
-    "gandalf": "old wizard with long grey beard and robes, pointed hat, glowing staff",
-    "frodo": "small hobbit with curly brown hair, big feet, wide innocent eyes, carrying ring",
-    "aragorn": "rugged dark-haired man with beard, ranger clothing, noble determined expression",
-    "iron man": "man in red gold high-tech armor suit, glowing arc reactor chest, confident pose",
-    "batman": "dark caped hero in black armor, cowl with pointy ears, serious expression",
-    "simba": "young lion cub with big golden eyes, fluffy mane starting, curious expression",
-}
+
 
 
 class ContentBrain:
@@ -175,24 +159,6 @@ Return ONLY a JSON array of 30 strings: ["Title 1", ..., "Title 30"]
         self._save_movies()
 
     # ─────────────────────────────────────────────────────────────────
-    # CHARACTER LOOK HELPER
-    # ─────────────────────────────────────────────────────────────────
-
-    def _get_char_descriptions(self, character_names):
-        """
-        Build a string of character visual descriptions for the prompt.
-        Helps Gemini write consistent Disney Pixar style image prompts.
-        """
-        descs = []
-        for name in character_names[:4]:  # max 4 chars
-            key = name.lower().strip()
-            for known_key, look in CHARACTER_LOOKS.items():
-                if known_key in key or key in known_key:
-                    descs.append(f"{name}: {look}")
-                    break
-        return "\n".join(descs) if descs else "Use visually descriptive character appearances"
-
-    # ─────────────────────────────────────────────────────────────────
     # SCRIPT GENERATION
     # ─────────────────────────────────────────────────────────────────
 
@@ -207,13 +173,21 @@ Return ONLY a JSON array of 30 strings: ["Title 1", ..., "Title 30"]
         movie_name   = self.state["current_movie"]
         story_so_far = self.state.get("story_so_far", "")
         last_ending  = self.state.get("last_scene_ending", "")
-        chars        = self.state.get("characters_introduced", [])
         events       = self.state.get("key_events_covered", [])
         progress_pct = (part_number / PARTS_PER_MOVIE) * 100
 
-        chars_str    = ", ".join(chars[-10:]) if chars else "None yet"
-        events_str   = ", ".join(events[-8:]) if events else "None yet"
-        char_descs   = self._get_char_descriptions(chars[-6:])
+        # character_profiles: {"HARRY": {"look": "...", "voice": "HERO"}, ...}
+        char_profiles = self.state.get("character_profiles", {})
+        events_str    = ", ".join(events[-8:]) if events else "None yet"
+
+        # Build character reference block from saved profiles
+        if char_profiles:
+            char_ref = "\n".join(
+                f"  {name}: gender={data.get('gender','male')} | voice={data.get('voice','HERO')} | look={data.get('look','?')[:80]}"
+                for name, data in list(char_profiles.items())[-8:]
+            )
+        else:
+            char_ref = "None yet — define all characters fresh this part"
 
         story_context = ""
         if story_so_far:
@@ -229,84 +203,60 @@ Return ONLY a JSON array of 30 strings: ["Title 1", ..., "Title 30"]
             part_instr = f"PART {part_number}/{PARTS_PER_MOVIE} ({progress_pct:.0f}% done). Continue EXACTLY from last scene. End on cliffhanger."
 
         prompt = f"""
-You are a master Hindi storyteller making a {PARTS_PER_MOVIE}-part Hindi YouTube Shorts series with MULTIPLE CHARACTER VOICES.
+You are a master Hindi storyteller making a {PARTS_PER_MOVIE}-part Hindi YouTube Shorts series.
 
-MOVIE/STORY: {movie_name}
+STORY: {movie_name}
 PART: {part_number}/{PARTS_PER_MOVIE}
-CHARACTERS SO FAR: {chars_str}
-EVENTS COVERED: {events_str}
+EVENTS SO FAR: {events_str}
 {story_context}
+CHARACTERS SO FAR:
+{char_ref}
+
 INSTRUCTION: {part_instr}
 
-━━━ SCRIPT FORMAT — MOST IMPORTANT ━━━
+━━━ CHARACTERS ━━━
 
-Write the script as a mix of NARRATOR lines and CHARACTER dialogue lines.
+Define ALL characters yourself from your knowledge of "{movie_name}" (or invent them for new stories).
+For EVERY character in this part return in "character_profiles":
 
-TAG RULES:
-- [NARRATOR] — Main storyteller (ALWAYS use this exact tag)
-- For ALL other characters — use the CHARACTER'S ACTUAL NAME as the tag
-  Examples: [HARRY], [VOLDEMORT], [HERMIONE], [SIMBA], [MUFASA], [FRODO]
-- Use ONLY character names that actually appear in "{movie_name}"
-- Assign voice types based on character role:
-    Main hero/protagonist → fast, energetic voice
-    Villain/antagonist    → slow, deep, menacing voice
-    Female characters     → warm, expressive female voice
-    Old/wise characters   → slow, calm, deep voice
-    Child characters      → fast, high-pitched, excited voice
-    Sidekick/funny        → cheerful, bouncy voice
+  "look"   → visual description for image gen (hair, eyes, clothes, face, build)
+  "gender" → "male" OR "female"   ← MANDATORY, controls which voice actor is used
+  "voice"  → one of: HERO / VILLAIN / ELDER / CHILD / SIDEKICK / FEMALE
 
-Also return a "character_voices" map in JSON telling the system which voice type each character uses.
-Voice type options: HERO, VILLAIN, FEMALE, CHILD, ELDER, SIDEKICK
+How gender + voice work together:
+  gender=male   → uses Hindi male voice (MadhurNeural)
+  gender=female → uses Hindi female voice (SwaraNeural)
+  voice         → controls speech style (speed + pitch):
+    HERO     = fast, energetic, brave
+    VILLAIN  = slow, deep, menacing
+    ELDER    = slow, calm, wise
+    CHILD    = very fast, high-pitched, excited
+    SIDEKICK = fast, cheerful, playful
+    FEMALE   = normal speed, warm (use for female chars with no other strong role)
 
-SCRIPT RULES:
-- NARRATOR lines describe action, emotions, scene transitions
-- CHARACTER lines are actual spoken dialogue (no quotes)
-- Mix 4-6 NARRATOR lines with 4-8 CHARACTER dialogue lines
-- Total 50-60 seconds when read aloud (~130 words)
-- Passionate Hinglish — Hindi mostly, thoda dramatic English
-- End on cliffhanger (except final part)
-- NARRATOR must be first and last line always
+Mix examples:
+  Female villain  → gender: female, voice: VILLAIN  → SwaraNeural slow dark
+  Old wise man    → gender: male,   voice: ELDER    → MadhurNeural slow deep
+  Young brave boy → gender: male,   voice: HERO     → MadhurNeural fast bright
+  Young girl      → gender: female, voice: CHILD    → SwaraNeural fast high
+  Funny male friend → gender: male, voice: SIDEKICK → MadhurNeural cheerful
 
-EXAMPLE for Harry Potter:
-[NARRATOR] Hogwarts ki raat thi, andhere mein kuch hil raha tha...
-[HARRY] Kaun hai wahan? Darr nahi lagta mujhe!
-[NARRATOR] Tabhi ek bhaari awaaz aayi...
-[VOLDEMORT] Hahaha... tum bahut bhaage ho chhote ladke. Ab kahan jaoge?
-[HARRY] Main nahi rukunga! Mere doston ki raksha karunga!
-[NARRATOR] Aur woh daud pada andheron mein... agli baar kya hoga?
+IMPORTANT: If character appeared in previous parts, keep their "look" EXACTLY the same.
 
-character_voices for above example:
-{{"HARRY": "HERO", "VOLDEMORT": "VILLAIN", "HERMIONE": "FEMALE", "DUMBLEDORE": "ELDER"}}
+━━━ SCRIPT ━━━
 
-━━━ IMAGE PROMPT RULES — MOST IMPORTANT ━━━
+Mix NARRATOR + CHARACTER lines.
+- [NARRATOR] = story action/transitions (deep dramatic)
+- [NAME] = character's ALL-CAPS name, e.g. [ARJUN], [ZARA], [RAVAN]
+- 4-6 NARRATOR + 4-8 CHARACTER lines, ~130 words total
+- NARRATOR first and last. Cliffhanger ending (except finale).
 
-Generate exactly 7 image_prompts.
-Each is a DIFFERENT visual shot/moment from this scene.
+━━━ IMAGES ━━━
 
-STYLE REQUIREMENT — ALL images MUST be in this EXACT style:
-"{PIXAR_STYLE}"
+7 image_prompts, each ending with: "{PIXAR_STYLE}"
+Use character's exact "look" from character_profiles in each prompt.
 
-This style MUST appear at the END of every single image prompt.
-Without this, images will look bad. Do NOT forget it.
-
-CHARACTER APPEARANCES to use consistently:
-{char_descs}
-
-For each prompt:
-1. Describe WHO is in scene (use exact character look from above)
-2. Describe WHAT they are doing
-3. Describe WHERE (setting, background, atmosphere)
-4. Describe LIGHTING and MOOD
-5. End with the EXACT style string above
-
-EXAMPLE of a CORRECT image prompt:
-"Harry Potter young boy with round glasses lightning bolt scar messy black hair Hogwarts robes, sitting at wooden desk reading glowing letter with shocked expression, cozy bedroom with brick walls candlelight, warm orange glow casting soft shadows, {PIXAR_STYLE}"
-
-━━━ PEXELS MOOD CLIPS ━━━
-Generate 2 pexels_moods — 3-4 word English search terms for real atmosphere clips.
-Examples: "castle fog night", "candles dark room", "forest moonlight mist"
-
-Return ONLY valid JSON:
+━━━ RETURN THIS JSON ━━━
 [
   {{
     "id": 1,
@@ -314,41 +264,45 @@ Return ONLY valid JSON:
     "part_number": {part_number},
     "total_parts": {PARTS_PER_MOVIE},
     "title": "{movie_name} | Part {part_number} — [catchy Hindi scene name]",
-    "scene_title": "[3-5 word dramatic Hindi scene name, e.g. 'Andheron Ka Raaz']",
-    "script_lines": [
-      {{"tag": "NARRATOR", "text": "Jungle ki raat thi..."}},
-      {{"tag": "HARRY",    "text": "Main nahi darta!"}},
-      {{"tag": "NARRATOR", "text": "Tabhi ek awaaz aayi..."}}
-    ],
-    "character_voices": {{
-      "HARRY": "HERO",
-      "VOLDEMORT": "VILLAIN",
-      "HERMIONE": "FEMALE",
-      "DUMBLEDORE": "ELDER"
+    "scene_title": "[3-5 word dramatic Hindi scene name]",
+    "character_profiles": {{
+      "ARJUN": {{
+        "look": "young man with short black hair, strong jawline, warrior armor, determined brown eyes",
+        "gender": "male",
+        "voice": "HERO"
+      }},
+      "DRAUPADI": {{
+        "look": "beautiful woman with long dark hair, traditional jewelry, silk saree, fierce eyes",
+        "gender": "female",
+        "voice": "FEMALE"
+      }},
+      "DURYODHAN": {{
+        "look": "tall muscular man with dark complexion, royal crown, arrogant sneer, black robes",
+        "gender": "male",
+        "voice": "VILLAIN"
+      }}
     }},
+    "script_lines": [
+      {{"tag": "NARRATOR",  "text": "Kurukshetra ka maidan soot gaya tha..."}},
+      {{"tag": "ARJUN",     "text": "Main nahi lad sakta apno ke khilaf!"}},
+      {{"tag": "NARRATOR",  "text": "Tabhi Krishna ne kaha..."}},
+      {{"tag": "DURYODHAN", "text": "Hahaha! Darr gaya na Arjun, bhag ja!"}},
+      {{"tag": "NARRATOR",  "text": "Agli baar kya hoga...?"}},
+    ],
     "hook_text": "Part {part_number}: [5 dramatic Hindi words]",
     "image_prompts": [
-      "[Shot 1 full detailed prompt ending with Pixar style]",
-      "[Shot 2 full detailed prompt ending with Pixar style]",
-      "[Shot 3 full detailed prompt ending with Pixar style]",
-      "[Shot 4 full detailed prompt ending with Pixar style]",
-      "[Shot 5 full detailed prompt ending with Pixar style]",
-      "[Shot 6 full detailed prompt ending with Pixar style]",
-      "[Shot 7 full detailed prompt ending with Pixar style]"
+      "[char look + action + setting + mood + {PIXAR_STYLE}]",
+      "[shot 2]", "[shot 3]", "[shot 4]", "[shot 5]", "[shot 6]", "[shot 7]"
     ],
-    "pexels_moods": ["3-4 word mood 1", "3-4 word mood 2"],
-    "new_characters": ["new character names only in this part"],
-    "new_events": ["2-3 key plot points from this part"],
-    "story_summary": "2-3 sentence complete story summary up to this part",
-    "scene_ending": "Exact last moment of this part for Part {part_number + 1} continuity"
+    "pexels_moods": ["battlefield dust dramatic", "temple fire night"],
+    "new_characters": ["names of NEW characters in this part only"],
+    "new_events": ["2-3 key events this part"],
+    "story_summary": "2-3 sentence summary up to this part",
+    "scene_ending": "Exact last moment for Part {part_number + 1} continuity"
   }}
 ]
 
-IMPORTANT:
-- script_lines "tag" must be NARRATOR or the CHARACTER'S ACTUAL NAME (all caps)
-- character_voices maps each character name → voice type (HERO/VILLAIN/FEMALE/CHILD/ELDER/SIDEKICK)
-- scene_title is a short dramatic Hindi name for THIS specific scene
-- "text" must NOT contain the tag prefix — just clean dialogue
+MANDATORY: gender field must be present for every character. Missing gender = male voice used by default.
 """
 
         models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.1-flash"]
@@ -379,30 +333,50 @@ IMPORTANT:
 
                     # Validate / normalise script_lines
                     VOICE_TYPES = {"NARRATOR","HERO","VILLAIN","FEMALE","CHILD","ELDER","SIDEKICK"}
-                    # character_voices: {"HARRY": "HERO", "VOLDEMORT": "VILLAIN", ...}
-                    char_voices = scene.get("character_voices", {})
-                    # Normalize keys to uppercase
-                    char_voices = {k.upper().strip(): v.upper().strip() for k, v in char_voices.items()}
-                    scene["character_voices"] = char_voices
+
+                    # character_profiles from Gemini: {"ARJUN": {"look":"...", "gender":"male", "voice":"HERO"}}
+                    raw_profiles = scene.get("character_profiles", {})
+                    saved_profiles = self.state.get("character_profiles", {})
+                    for char_name, data in raw_profiles.items():
+                        key = char_name.upper().strip()
+                        if not isinstance(data, dict):
+                            continue
+                        voice  = str(data.get("voice",  "HERO")).upper().strip()
+                        gender = str(data.get("gender", "male")).lower().strip()
+                        look   = str(data.get("look",   "")).strip()
+                        if voice not in VOICE_TYPES:
+                            voice = "HERO"
+                        if gender not in ("male", "female"):
+                            gender = "male"
+                        if key not in saved_profiles:
+                            saved_profiles[key] = {"look": look, "gender": gender, "voice": voice}
+                        else:
+                            # Keep first look forever, but allow voice/gender update
+                            if not saved_profiles[key].get("look"):
+                                saved_profiles[key]["look"] = look
+                            saved_profiles[key]["gender"] = gender
+                            saved_profiles[key]["voice"]  = voice
+
+                    self.state["character_profiles"] = saved_profiles
+                    scene["character_profiles"] = saved_profiles
 
                     raw_lines = scene.get("script_lines", [])
                     clean_lines = []
                     for ln in raw_lines:
                         if not isinstance(ln, dict):
                             continue
-                        tag  = str(ln.get("tag", "NARRATOR")).upper().strip()
-                        txt  = str(ln.get("text", "")).strip()
+                        tag = str(ln.get("tag", "NARRATOR")).upper().strip()
+                        txt = str(ln.get("text", "")).strip()
                         if not txt:
                             continue
-                        # NARRATOR stays as-is; other tags are character names
-                        # Resolve voice type for audio engine
+                        # Resolve voice_type
                         if tag == "NARRATOR":
                             voice_type = "NARRATOR"
                         elif tag in VOICE_TYPES:
-                            voice_type = tag   # old-style fallback
+                            voice_type = tag  # old-style fallback
                         else:
-                            # tag is a character name like "HARRY"
-                            voice_type = char_voices.get(tag, "HERO")
+                            # character name tag — look up in profiles
+                            voice_type = saved_profiles.get(tag, {}).get("voice", "HERO")
                         clean_lines.append({
                             "tag":        tag,
                             "voice_type": voice_type,
@@ -413,18 +387,18 @@ IMPORTANT:
                     if not clean_lines and scene.get("text"):
                         clean_lines = [{"tag": "NARRATOR", "voice_type": "NARRATOR", "text": scene["text"]}]
                     scene["script_lines"] = clean_lines
-                    # Build plain text for subtitles / backward compat
                     scene["text"] = " ".join(ln["text"] for ln in clean_lines)
 
                     result[0] = scene
 
-                    tags_used = list({ln["tag"] for ln in clean_lines})
-                    print(f"   ✅ Part {part_number} | {len(fixed)} images | moods: {scene.get('pexels_moods',[])} | chars: {tags_used}")
+                    tags_used = [(ln["tag"], ln["voice_type"]) for ln in clean_lines if ln["tag"] != "NARRATOR"]
+                    print(f"   ✅ Part {part_number} | {len(fixed)} images | chars: {tags_used}")
 
                     # Update story state
                     for c in scene.get("new_characters", []):
-                        if c not in self.state["characters_introduced"]:
-                            self.state["characters_introduced"].append(c)
+                        c_upper = c.upper().strip()
+                        if c_upper not in self.state.get("characters_introduced", []):
+                            self.state.setdefault("characters_introduced", []).append(c_upper)
                     self.state["key_events_covered"].extend(scene.get("new_events", []))
                     self.state["key_events_covered"] = self.state["key_events_covered"][-30:]
                     if scene.get("story_summary"):
