@@ -351,11 +351,11 @@ MANDATORY: gender field must be present for every character. Missing gender = ma
                         if key not in saved_profiles:
                             saved_profiles[key] = {"look": look, "gender": gender, "voice": voice}
                         else:
-                            # Keep first look forever, but allow voice/gender update
                             if not saved_profiles[key].get("look"):
                                 saved_profiles[key]["look"] = look
                             saved_profiles[key]["gender"] = gender
                             saved_profiles[key]["voice"]  = voice
+                            # preserve voice_slot if already assigned by audio engine
 
                     self.state["character_profiles"] = saved_profiles
                     scene["character_profiles"] = saved_profiles
