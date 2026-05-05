@@ -116,14 +116,27 @@ Return ONLY a JSON array of 30 strings: ["Title 1", ..., "Title 30"]
     def _load_state(self):
         if os.path.exists(STORY_STATE_FILE):
             with open(STORY_STATE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                state = json.load(f)
+            # Normalize character_profiles keys on load — fixes NED STARK / NED_STARK duplicates
+            if "character_profiles" in state:
+                raw = state["character_profiles"]
+                clean = {}
+                for k, v in raw.items():
+                    canonical = k.upper().strip().replace("_", " ")
+                    if canonical not in clean:
+                        clean[canonical] = v
+                    else:
+                        if not clean[canonical].get("look") and v.get("look"):
+                            clean[canonical]["look"] = v["look"]
+                state["character_profiles"] = clean
+            return state
         first = self.movies_data["movies"][0] if self.movies_data["movies"] else "Harry Potter and the Sorcerer's Stone"
         return {
             "current_movie": first, "current_movie_index": 0,
             "current_part": 0, "total_parts": PARTS_PER_MOVIE,
             "story_so_far": "", "last_scene_ending": "",
             "characters_introduced": [], "key_events_covered": [],
-            "completed_movies": []
+            "completed_movies": [], "character_profiles": {}
         }
 
     def _save_state(self):
@@ -153,6 +166,7 @@ Return ONLY a JSON array of 30 strings: ["Title 1", ..., "Title 30"]
             "current_movie": next_movie, "current_movie_index": next_idx,
             "current_part": 0, "story_so_far": "", "last_scene_ending": "",
             "characters_introduced": [], "key_events_covered": [],
+            "character_profiles": {},   # fresh slate for new movie
         })
         self.movies_data["current_movie_index"] = next_idx
         self._save_state()
@@ -334,11 +348,15 @@ MANDATORY: gender field must be present for every character. Missing gender = ma
                     # Validate / normalise script_lines
                     VOICE_TYPES = {"NARRATOR","HERO","VILLAIN","FEMALE","CHILD","ELDER","SIDEKICK"}
 
-                    # character_profiles from Gemini: {"ARJUN": {"look":"...", "gender":"male", "voice":"HERO"}}
-                    raw_profiles = scene.get("character_profiles", {})
+                    def _canonical(name):
+                        return name.upper().strip().replace("_", " ")
+
+                    # character_profiles from Gemini
+                    raw_profiles   = scene.get("character_profiles", {})
                     saved_profiles = self.state.get("character_profiles", {})
+
                     for char_name, data in raw_profiles.items():
-                        key = char_name.upper().strip()
+                        key = _canonical(char_name)   # normalize: "NED_STARK" == "NED STARK"
                         if not isinstance(data, dict):
                             continue
                         voice  = str(data.get("voice",  "HERO")).upper().strip()
@@ -355,27 +373,24 @@ MANDATORY: gender field must be present for every character. Missing gender = ma
                                 saved_profiles[key]["look"] = look
                             saved_profiles[key]["gender"] = gender
                             saved_profiles[key]["voice"]  = voice
-                            # preserve voice_slot if already assigned by audio engine
 
                     self.state["character_profiles"] = saved_profiles
                     scene["character_profiles"] = saved_profiles
 
-                    raw_lines = scene.get("script_lines", [])
+                    raw_lines   = scene.get("script_lines", [])
                     clean_lines = []
                     for ln in raw_lines:
                         if not isinstance(ln, dict):
                             continue
-                        tag = str(ln.get("tag", "NARRATOR")).upper().strip()
+                        tag = _canonical(str(ln.get("tag", "NARRATOR")))
                         txt = str(ln.get("text", "")).strip()
                         if not txt:
                             continue
-                        # Resolve voice_type
                         if tag == "NARRATOR":
                             voice_type = "NARRATOR"
                         elif tag in VOICE_TYPES:
-                            voice_type = tag  # old-style fallback
+                            voice_type = tag
                         else:
-                            # character name tag — look up in profiles
                             voice_type = saved_profiles.get(tag, {}).get("voice", "HERO")
                         clean_lines.append({
                             "tag":        tag,
